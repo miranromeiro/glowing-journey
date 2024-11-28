@@ -1,0 +1,56 @@
+version: '3.8'
+
+services:
+  flask-app:
+    build: ./app
+    ports:
+      - "5000:5000"
+    depends_on:
+      postgres:
+        condition: service_healthy
+    networks:
+      - monitoring-network
+
+  postgres:
+    image: postgres:13
+    environment:
+      POSTGRES_DB: meubanco
+      POSTGRES_USER: usuario
+      POSTGRES_PASSWORD: senha
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U usuario -d meubanco"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+    networks:
+      - monitoring-network
+
+  prometheus:
+    image: prom/prometheus
+    volumes:
+      - ./prometheus/prometheus.yml:/etc/prometheus/prometheus.yml
+    ports:
+      - "9090:9090"
+    networks:
+      - monitoring-network
+
+  grafana:
+    image: grafana/grafana
+    ports:
+      - "3000:3000"
+    volumes:
+      - grafana-data:/var/lib/grafana
+    networks:
+      - monitoring-network
+    environment:
+        - GF_AUTH_ANONYMOUS_ENABLED=true
+        - GF_AUTH_ANONYMOUS_ORG_ROLE=Admin
+
+volumes:
+  postgres-data:
+  grafana-data:
+
+networks:
+  monitoring-network:
