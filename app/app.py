@@ -1,56 +1,90 @@
 from flask import Flask, request, jsonify
 from flask_sqlalchemy import SQLAlchemy
-from prometheus_client import Counter, Histogram, generate_latest, CONTENT_TYPE_LATEST
+from prometheus_client import Counter, Histogram, Summary, generate_latest, CONTENT_TYPE_LATEST
 from prometheus_flask_exporter import PrometheusMetrics
 import time
 
-# Criar a aplicação Flask
 app = Flask(__name__)
 app.config['SQLALCHEMY_DATABASE_URI'] = 'postgresql://usuario:senha@postgres:5432/meubanco'
 app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
 
-# Inicializar o SQLAlchemy sem passar o app inicialmente
 db = SQLAlchemy()
 
-# Configurar as métricas do Prometheus
 metrics = PrometheusMetrics(app)
-REQUEST_COUNT = Counter('app_requests_total', 'Total de Requisições')
-REQUEST_LATENCY = Histogram('app_request_latency_seconds', 'Tempo de Resposta')
 
-# Definir o modelo de usuário
+USER_REGISTRATION_COUNTER = Counter(
+    'user_registration_total', 
+    'Total de Requisições de Cadastro de Usuário',
+    ['method', 'endpoint', 'status']
+)
+
+USER_REGISTRATION_LATENCY = Histogram(
+    'user_registration_latency_seconds', 
+    'Tempo de Resposta do Cadastro de Usuário',
+    ['method', 'endpoint'],
+    buckets=[0.1, 0.25, 0.5, 1, 2.5, 5, 10]
+)
+
+USER_REGISTRATION_DURATION = Summary(
+    'user_registration_duration_seconds',
+    'Tempo total de processamento do cadastro de usuário',
+    ['method', 'endpoint']
+)
+
 class Usuario(db.Model):
     id = db.Column(db.Integer, primary_key=True)
     nome = db.Column(db.String(100), nullable=False)
 
-# Inicializar o banco de dados com o app
 def init_app():
-    # Inicializar o db com o app
     db.init_app(app)
     
-    # Criar o contexto da aplicação
     with app.app_context():
-        # Criar todas as tabelas
         db.create_all()
 
-# Rotas
 @app.route('/usuario', methods=['POST'])
-@REQUEST_LATENCY.time()
 def criar_usuario():
-    REQUEST_COUNT.inc()
-    dados = request.get_json()
-    novo_usuario = Usuario(nome=dados['nome'])
-    db.session.add(novo_usuario)
-    db.session.commit()
-    return jsonify({"id": novo_usuario.id, "nome": novo_usuario.nome}), 201
+    start_time = time.time()
+    
+    try:
+        dados = request.get_json()
+        
+        USER_REGISTRATION_COUNTER.labels(
+            method='POST', 
+            endpoint='/usuario', 
+            status='success'
+        ).inc()
+        
+        novo_usuario = Usuario(nome=dados['nome'])
+        db.session.add(novo_usuario)
+        db.session.commit()
+        
+        latency = time.time() - start_time
+        
+        USER_REGISTRATION_LATENCY.labels(
+            method='POST', 
+            endpoint='/usuario'
+        ).observe(latency)
+        
+        USER_REGISTRATION_DURATION.labels(
+            method='POST', 
+            endpoint='/usuario'
+        ).observe(latency)
+        
+        return jsonify({"id": novo_usuario.id, "nome": novo_usuario.nome}), 201
+    
+    except Exception as e:
+        USER_REGISTRATION_COUNTER.labels(
+            method='POST', 
+            endpoint='/usuario', 
+            status='failure'
+        ).inc()
+        
+        return jsonify({"erro": str(e)}), 400
 
 @app.route('/metrics')
 def metrics():
     return generate_latest(), 200, {'Content-Type': CONTENT_TYPE_LATEST}
 
-# Inicialização principal
 if __name__ == '__main__':
-    # Chamar a função de inicialização
     init_app()
-    
-    # Iniciar o aplicativo
     app.run(host='0.0.0.0', port=5000)
